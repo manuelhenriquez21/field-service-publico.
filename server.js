@@ -61,6 +61,37 @@ const app = http.createServer(async (req,res)=>{
     const session=currentSession(req); if(!session)return send(res,403,{error:'Acceso de solo lectura'});
     try { const b=await body(req),name=String(b.name||'').trim(); if(!name)return send(res,400,{error:'El nombre del proyecto es obligatorio'}); if(data.projects.some(p=>p.toLowerCase()===name.toLowerCase()))return send(res,409,{error:'El proyecto ya está en la lista'}); const assignedFs=session.role==='field'?[session.user]:(Array.isArray(b.assignedFs)?b.assignedFs.filter(p=>data.people.includes(p)):[]); data.projects.push(name); data.projectDetails ||= []; data.projectDetails.push({name,contractor:String(b.contractor||''),contract:String(b.contract||''),tm:String(b.tm||''),commune:String(b.commune||''),assignedFs}); fs.writeFileSync(DATA_FILE,JSON.stringify(data,null,2)); return send(res,201,{ok:true}); } catch { return send(res,400,{error:'No se pudo crear el proyecto'}); }
   }
+  if (url.pathname==='/api/projects' && req.method==='PUT') {
+    if (PREVIEW_MODE) return send(res,403,{error:'La versión de demostración es de solo lectura'});
+    const session=currentSession(req); if(session?.role!=='engineer')return send(res,403,{error:'Solo Ingeniería puede modificar los datos de una obra'});
+    try {
+      const b=await body(req),oldName=String(b.oldName||'').trim(),name=String(b.name||'').trim();
+      if(!oldName||!name)return send(res,400,{error:'El nombre del proyecto es obligatorio'});
+      const index=data.projects.findIndex(p=>p.toLowerCase()===oldName.toLowerCase());
+      if(index<0)return send(res,404,{error:'No se encontró la obra'});
+      if(data.projects.some((p,i)=>i!==index&&p.toLowerCase()===name.toLowerCase()))return send(res,409,{error:'Ya existe una obra con ese nombre'});
+      const detail={name,contractor:String(b.contractor||'').trim(),contract:String(b.contract||'').trim(),tm:String(b.tm||'').trim(),commune:String(b.commune||'').trim(),assignedFs:Array.isArray(b.assignedFs)?b.assignedFs.filter(p=>data.people.includes(p)):[]};
+      data.projects[index]=name; data.projectDetails ||= [];
+      const detailIndex=data.projectDetails.findIndex(p=>p.name.toLowerCase()===oldName.toLowerCase());
+      if(detailIndex<0)data.projectDetails.push(detail);else data.projectDetails[detailIndex]=detail;
+      for(const event of data.events)if(String(event.project||'').toLowerCase()===oldName.toLowerCase())event.project=name;
+      for(const request of data.requests||[])if(String(request.project||'').toLowerCase()===oldName.toLowerCase())request.project=name;
+      for(const travel of data.airTravel||[])if(String(travel.project||'').toLowerCase()===oldName.toLowerCase())travel.project=name;
+      fs.writeFileSync(DATA_FILE,JSON.stringify(data,null,2)); return send(res,200,{ok:true});
+    } catch { return send(res,400,{error:'No se pudieron guardar los cambios de la obra'}); }
+  }
+  if (url.pathname==='/api/projects' && req.method==='DELETE') {
+    if (PREVIEW_MODE) return send(res,403,{error:'La versión de demostración es de solo lectura'});
+    const session=currentSession(req); if(session?.role!=='engineer')return send(res,403,{error:'Solo Ingeniería puede eliminar una obra'});
+    const name=String(url.searchParams.get('name')||'').trim(); if(!name)return send(res,400,{error:'Indica la obra que deseas eliminar'});
+    const exists=data.projects.some(p=>p.toLowerCase()===name.toLowerCase()); if(!exists)return send(res,404,{error:'No se encontró la obra'});
+    data.projects=data.projects.filter(p=>p.toLowerCase()!==name.toLowerCase());
+    data.projectDetails=(data.projectDetails||[]).filter(p=>p.name.toLowerCase()!==name.toLowerCase());
+    data.events=(data.events||[]).filter(e=>String(e.project||'').toLowerCase()!==name.toLowerCase());
+    data.requests=(data.requests||[]).filter(r=>String(r.project||'').toLowerCase()!==name.toLowerCase());
+    data.airTravel=(data.airTravel||[]).filter(t=>String(t.project||'').toLowerCase()!==name.toLowerCase());
+    fs.writeFileSync(DATA_FILE,JSON.stringify(data,null,2)); return send(res,200,{ok:true});
+  }
   if (url.pathname==='/api/state' && req.method==='PUT') {
     if (PREVIEW_MODE) return send(res,403,{error:'La versión de demostración es de solo lectura'});
     const session=currentSession(req); if (!session) return send(res,403,{error:'Acceso de solo lectura'});
@@ -73,8 +104,9 @@ const app = http.createServer(async (req,res)=>{
       }
       data=incoming; fs.writeFileSync(DATA_FILE,JSON.stringify(data,null,2)); return send(res,200,{ok:true}); } catch { return send(res,400,{error:'No se pudieron guardar los cambios'}); }
   }
-  if (url.pathname!=='/' && url.pathname!=='/index.html') return send(res,404,'No encontrado','text/plain');
-  const f=path.join(__dirname,'index.html');
-  res.writeHead(200,{'Content-Type':mime['.html'],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin','X-Frame-Options':'DENY'}); fs.createReadStream(f).pipe(res);
+  if (!['/','/index.html','/features.js'].includes(url.pathname)) return send(res,404,'No encontrado','text/plain');
+  const f=path.join(__dirname,url.pathname==='/features.js'?'features.js':'index.html');
+  if (!fs.existsSync(f) || !fs.statSync(f).isFile()) return send(res,404,'No encontrado','text/plain');
+  res.writeHead(200,{'Content-Type':mime[path.extname(f)]||'application/octet-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin','X-Frame-Options':'DENY'}); fs.createReadStream(f).pipe(res);
 });
 app.listen(PORT,'0.0.0.0',()=>console.log(`Field Service ${PREVIEW_MODE?'demo de solo lectura':'Calendar'} listo en puerto ${PORT}`));
